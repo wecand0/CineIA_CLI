@@ -65,6 +65,7 @@ static const std::string productVersion = ASDCP::Version();
 void showProgramInfo() {
     printf("\n\tCineIA_CLI Version %d.%d.%d, %s: ", PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH, __DATE__);
     printf("IMF IAB to IAB Application Profile 1 DCP IAB converter.\n");
+    printf("\t\t\tCopyright (c) 2025 @izwb003, @Shino_Rize, @Connor\n");
     printf("\t\tPowered by IABLib and AS-DCP. Run \"cineia -l\" for more information.\n\n");
     printf(RED" Warning:" NONE);
     printf(YELLOW" Note:" NONE);
