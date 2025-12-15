@@ -1,0 +1,431 @@
+## vcpkg
+ D .gitmodules
+ M CMakeLists.txt
+ M cineia.cpp
+ M main.cpp
+?? .idea/
+?? vcpkg.json
+ .gitmodules    |   9 ----
+ CMakeLists.txt | 106 +++++++++++++++++++++++++++++-------
+ cineia.cpp     |   1 +
+ main.cpp       | 168 ++++++++++++++++++++++++++++++++++++++++++++++-----------
+ 4 files changed, 223 insertions(+), 61 deletions(-)
+diff --git a/.gitmodules b/.gitmodules
+deleted file mode 100644
+index b3abbb3..0000000
+--- a/.gitmodules
++++ /dev/null
+@@ -1,9 +0,0 @@
+-[submodule "external/iab-renderer"]
+-       path = external/iab-renderer
+-       url = https://github.com/DTSProAudio/iab-renderer.git
+-[submodule "external/asdcplib"]
+-       path = external/asdcplib
+-       url = https://github.com/cinecert/asdcplib.git
+-[submodule "external/indicators"]
+-       path = external/indicators
+-       url = https://github.com/p-ranav/indicators.git
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index e19a577..87c3675 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,17 +1,62 @@
+ cmake_minimum_required(VERSION 3.10)
+-project(CineIA_CLI VERSION 0.2.2)
++project(CineIA_CLI VERSION 0.2.1 LANGUAGES CXX C)
++
++
++# Глобально просим собирать статические библиотеки
++set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries" FORCE)
++# Static CRT for MSVC
++if(MSVC)
++    # Set default VCPKG triplet for static linking
++    set(VCPKG_DEFAULT_TRIPLET x64-windows-static)
++
++    # Set runtime library to static for MSVC
++    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>$<$<CONFIG:Release>:>")
++
++    # Additional static CRT setup (you can remove this if you stick to the above)
++    foreach(flag_var
++            CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE
++            CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO
++            CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
++            CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO)
++        if(${flag_var} MATCHES "/MD")
++            string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
++        endif()
++    endforeach()
++
++    # Additional linker flags for static linking
++    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /INCREMENTAL:NO")
++    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG")
++
++    # Set optimization for Release build
++    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
++    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2")
++
++    # Strip debugging information
++    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG:NONE")
++    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /OPT:REF /OPT:ICF")
++
++    # Disable CRT warnings
++    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
++endif()
++
++# Set optimization to -O3 for Release build (non-MSVC)
++if(NOT MSVC)
++    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -fvisibility=hidden -fstack-protector-strong -Wunreachable-code -Wno-attributes -Werror=return-type")
++    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -fvisibility=hidden -fstack-protector-strong -Wunreachable-code -Wno-attributes -Werror=return-type -pedantic")
++endif()
++
+
+ # Init CMake
+ cmake_policy(SET CMP0048 NEW)
+-set(CMAKE_CXX_STANDARD 11)
+-set(CMAKE_MACOSX_RPATH ON)
+-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
++set(CMAKE_CXX_STANDARD 20)
++
++add_subdirectory(external/indicators)
+
+ # Include iab-renderer library
+ add_subdirectory(external/iab-renderer)
+ set(IABLib_HEADER_PATH
+-    external/iab-renderer/include
+-    external/iab-renderer/src/lib
++        external/iab-renderer/include
++        external/iab-renderer/src/lib
+ )
+
+ # Include asdcplib library
+@@ -22,35 +67,56 @@ elseif(UNIX)
+     add_definitions(/DASDCP_PLATFORM=\"unix\")
+ endif()
+ set(ASDCP_HEADER_PATH
+-    external/asdcplib/src
++        external/asdcplib/src
+ )
+
+ # Include indicators library
+ set(INDICATORS_HEADER_PATH
+-    external/indicators/include
++        external/indicators/include
+ )
+
+ # Build executable
+ add_executable(cineia
+-    main.cpp
+-    cineia.h cineia.cpp
++        main.cpp
++        cineia.h cineia.cpp
+ )
++target_include_directories(cineia PUBLIC external/indicators/include)
+ target_link_libraries(cineia
+-    IABLib
+-    libkumu libasdcp libas02
++        IABLib
++        libkumu libasdcp libas02
+ )
++
++# Системные библиотеки для статической линковки
++if(UNIX)
++    # Принудительная статическая линковка под Linux/MinGW
++    target_link_options(cineia PRIVATE -s -static -static-libgcc -static-libstdc++)
++elseif(WIN32)
++    # Библиотеки WinAPI, необходимые asdcplib/kumu при статической линковке
++    target_link_libraries(cineia
++            indicators::indicators
++            ws2_32
++            iphlpapi
++            advapi32
++    )
++    # Статическая CRT для MSVC
++    if(MSVC)
++        target_compile_options(cineia PRIVATE
++                 $<$<CONFIG:Release>:/MT>
++        )
++    endif()
++endif()
++
+ target_include_directories(cineia PRIVATE
+-    ${ASDCP_HEADER_PATH}
+-    ${IABLib_HEADER_PATH}
+-    ${INDICATORS_HEADER_PATH}
++        ${ASDCP_HEADER_PATH}
++        ${IABLib_HEADER_PATH}
+ )
+
+-# Pass version number
++# Pass version numberope
+ target_compile_definitions(cineia PRIVATE
+-    PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+-    PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+-    PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH}
++        PROJECT_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
++        PROJECT_VERSION_MINOR=${PROJECT_VERSION_MINOR}
++        PROJECT_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+ )
+
+ # Set install rules
+-install(TARGETS cineia RUNTIME DESTINATION bin)
++install(TARGETS cineia RUNTIME DESTINATION bin)
+\ No newline at end of file
+diff --git a/cineia.cpp b/cineia.cpp
+index 23c4013..b1780f1 100644
+--- a/cineia.cpp
++++ b/cineia.cpp
+@@ -22,6 +22,7 @@
+ #include "cineia.h"
+
+ // Because provided APIs of IABLib are too simple, we choose not to use them.
++#include <iostream>
+ #include <parser/IABParser.h>
+ #include <packer/IABPacker.h>
+ #include <common/IABElements.h>
+diff --git a/main.cpp b/main.cpp
+index 9b694b9..7b9aa3a 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -29,6 +29,7 @@
+ #include <indicators/cursor_control.hpp>
+
+ #include "cineia.h"
++#include <limits>
+
+ // AS-DCP Program information
+ static const byte_t productUUID[ASDCP::UUIDlen] =
+@@ -37,9 +38,9 @@ static const byte_t productUUID[ASDCP::UUIDlen] =
+          0xDB, 0x81, 0xC0, 0xDF,
+          0x9E, 0x61, 0x8C, 0x3F};
+ static const std::string companyName = "CineIA "
+-        + std::to_string(PROJECT_VERSION_MAJOR)
+-        + "." + std::to_string(PROJECT_VERSION_MINOR)
+-        + "." + std::to_string(PROJECT_VERSION_PATCH);
++                                       + std::to_string(PROJECT_VERSION_MAJOR)
++                                       + "." + std::to_string(PROJECT_VERSION_MINOR)
++                                       + "." + std::to_string(PROJECT_VERSION_PATCH);
+ static const std::string productName = "asdcplib";
+ static const std::string productVersion = ASDCP::Version();
+
+@@ -64,16 +65,8 @@ static const std::string productVersion = ASDCP::Version();
+ void showProgramInfo() {
+     printf("\n\tCineIA_CLI Version %d.%d.%d, %s: ", PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH, __DATE__);
+     printf("IMF IAB to IAB Application Profile 1 DCP IAB converter.\n");
+-    printf("\t\t\tCopyright (c) 2025 @izwb003, @Shino_Rize, @Connor\n");
+     printf("\t\tPowered by IABLib and AS-DCP. Run \"cineia -l\" for more information.\n\n");
+     printf(RED" Warning:" NONE);
+-    printf(" THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS\n"
+-           " OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+-           " FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+-           " AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+-           " LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+-           " OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+-           " SOFTWARE.\n");
+     printf(YELLOW" Note:" NONE);
+     printf(" CineIA is an IAB Application Profile 1 DCP IAB generator. It CANNOT replace\n"
+            " a Dolby Atmos® Cinema MXF generator's work, although they are compatible. \n"
+@@ -208,12 +201,118 @@ struct cmdSettings {
+     std::string outputFileName;
+ };
+
++static void ensureMxfExtension(std::string &path) {
++    if(path.empty()) return;
++    if(path.length() < std::string(".mxf").length() ||
++       path.compare(path.length() - std::string(".mxf").length(),
++                    std::string(".mxf").length(), std::string(".mxf")) != 0) {
++        path.append(".mxf");
++    }
++}
++
++static bool promptInteractive(cmdSettings &settings) {
++    // Interactive prompt for users who launched the app without CLI args (e.g., double-click)
++    std::cout << "\nCineIA_CLI interactive mode. Enter parameters below (press Enter to accept defaults).\n";
++    std::cout << "You can run 'cineia -h' for full CLI usage when using a terminal.\n\n";
++
++    // Consume any leftover newline just in case
++    if(std::cin.peek() == '\n') std::cin.get();
++
++    std::string line;
++
++    // Input file
++    while (settings.inputFileName.empty()) {
++        std::cout << "Input IMF IAB file path (.mxf): ";
++        std::getline(std::cin, line);
++        // Trim spaces
++        line.erase(0, line.find_first_not_of(' '));
++        line.erase(line.find_last_not_of(' ') + 1);
++        if(line.empty()) {
++            std::cout << "Please enter a valid path.\n";
++            continue;
++        }
++        settings.inputFileName = line;
++        ensureMxfExtension(settings.inputFileName);
++    }
++
++    // Output file
++    while (settings.outputFileName.empty()) {
++        std::cout << "Output DCP IAB file path (.mxf): ";
++        std::getline(std::cin, line);
++        line.erase(0, line.find_first_not_of(' '));
++        line.erase(line.find_last_not_of(' ') + 1);
++        if(line.empty()) {
++            std::cout << "Please enter a valid path.\n";
++            continue;
++        }
++        settings.outputFileName = line;
++        ensureMxfExtension(settings.outputFileName);
++
++        if(isFileExists(settings.outputFileName)) {
++            std::cout << "Output file " << settings.outputFileName << " already exists. Overwrite? (Y/N):";
++            char ans = '\0';
++            std::cin >> ans;
++            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
++            if(ans != 'Y' && ans != 'y') {
++                // reset to force re-prompt for a different name
++                settings.outputFileName.clear();
++                std::cout << "Please enter a different output path.\n";
++            }
++        }
++    }
++
++    // copyPreambleValue toggle
++    std::cout << "Copy PreambleValue from IMF to output? [Y/n] (default: Y): ";
++    std::getline(std::cin, line);
++    if(!line.empty()) {
++        if(line == "n" || line == "N" || line == "no" || line == "No" || line == "NO")
++            settings.copyPreambleValue = false;
++    }
++
++    // forceDolbyConstraint toggle
++    std::cout << "Force Dolby constraint if needed? [y/N] (default: N): ";
++    std::getline(std::cin, line);
++    if(!line.empty()) {
++        if(line == "y" || line == "Y" || line == "yes" || line == "Yes" || line == "YES")
++            settings.forceDolbyConstraint = true;
++    }
++
++    // bedChannelCount
++    std::cout << "Bed channel count (default 10): ";
++    std::getline(std::cin, line);
++    if(!line.empty()) {
++        try {
++            int v = std::stoi(line);
++            if(v > 0 && v < 1000) settings.bedChannelCount = static_cast<ui16_t>(v);
++            else std::cout << "Invalid value, keep default: " << settings.bedChannelCount << "\n";
++        }
++        catch(...) {
++            std::cout << "Invalid value, keep default: " << settings.bedChannelCount << "\n";
++        }
++    }
++
++    // objectCount
++    std::cout << "Object count (default 118): ";
++    std::getline(std::cin, line);
++    if(!line.empty()) {
++        try {
++            int v = std::stoi(line);
++            if(v > 0 && v < 2000) settings.objectCount = static_cast<ui16_t>(v);
++            else std::cout << "Invalid value, keep default: " << settings.objectCount << "\n";
++        }
++        catch(...) {
++            std::cout << "Invalid value, keep default: " << settings.objectCount << "\n";
++        }
++    }
++
++    return true;
++}
++
+ bool parseCommandLineOptions(int argc, const char* argv[], cmdSettings &settings) {
+     if(argc == 1) {
+-        fprintf(stderr, RED" Error:" NONE);
+-        fprintf(stderr, " No command line parameters were read.\n");
+-        fprintf(stderr, " \tRun \"cineia -h\" or \"cineia --help\" for help.\n");
+-        return false;
++        // No CLI args: enter interactive mode to allow users to input parameters when app is started by double-click
++        std::cout << "No command line parameters were read. Switching to interactive mode...\n";
++        return promptInteractive(settings);
+     }
+
+     for(int parseCmd = 1; parseCmd < argc; parseCmd ++) {
+@@ -295,7 +394,7 @@ bool parseCommandLineOptions(int argc, const char* argv[], cmdSettings &settings
+     if(settings.inputFileName.empty() || settings.outputFileName.empty()) {
+         fprintf(stderr, RED" Error:" NONE);
+         fprintf(stderr, " No input or output file specified.\n"
+-               " \tBoth must be specified simultaneously.\n");
++                        " \tBoth must be specified simultaneously.\n");
+         return false;
+     }
+     return true;
+@@ -461,32 +560,37 @@ int main(int argc, const char* argv[]) {
+
+     // Build a progress bar
+     indicators::show_console_cursor(false);
++
+     indicators::ProgressBar bar{
+-        indicators::option::BarWidth{40},
+-        indicators::option::Start{"["},
+-        indicators::option::Fill{"="},
+-        indicators::option::Lead{"="},
+-        indicators::option::Remainder{" "},
+-        indicators::option::End{"]"},
+-        indicators::option::ForegroundColor{indicators::Color::green},
+-        indicators::option::ShowElapsedTime{true},
+-        indicators::option::ShowRemainingTime{true},
+-        indicators::option::FontStyles{std::vector<indicators::FontStyle>{indicators::FontStyle::bold}},
+-        indicators::option::MaxProgress{frameCount}
++            indicators::option::BarWidth{50},
++            indicators::option::Start{" ["},
++            indicators::option::Fill{"#"},
++            indicators::option::Lead{"#"},
++            indicators::option::Remainder{"-"},
++            indicators::option::End{"]"},
++            indicators::option::PrefixText{"Converting "},
++            // Use std::cerr as the output stream so the bar updates in-place even when std::cout
++            // is captured by an IDE/CI and treated as non-interactive (causing new lines).
++            indicators::option::Stream{std::cerr},
++            indicators::option::ForegroundColor{indicators::Color::yellow},
++            indicators::option::ShowPercentage{true},
++            indicators::option::ShowElapsedTime{true},
++            indicators::option::ShowRemainingTime{true},
++            indicators::option::FontStyles{std::vector<indicators::FontStyle>{indicators::FontStyle::bold}},
++            indicators::option::MaxProgress{frameCount}
+     };
+
+     // Conversion
+-    for(uint32_t frameNum = 0; frameNum < frameCount; frameNum ++) {
++    for(uint32_t frameNum = 0; frameNum < frameCount; frameNum++) {
+         bar.set_option(indicators::option::PostfixText{
+                 "Frame: " + std::to_string(frameNum + 1) + "/" + std::to_string(frameCount)
+                 + " Size: " + std::to_string(outputFileSize / 1000) + "KB"
+         });
+         if(frameNum + 1 == frameCount)
+             bar.set_option(indicators::option::PostfixText{
+-                "Completed. Size: " + std::to_string(outputFileSize / 1000) + "KB"
++                    "Completed. Size: " + std::to_string(outputFileSize / 1000) + "KB"
+             });
+         bar.tick();
+-
+         AS_02::IAB::MXFReader::Frame iFrameWrite;
+         std::stringstream iFrameStreamWrite;
+         std::vector<char> oFrameWrite;
+@@ -501,7 +605,7 @@ int main(int argc, const char* argv[]) {
+             return -4;
+         }
+
+-        iFrameStreamWrite.write((const char*)iFrameWrite.second, iFrameWrite.first);
++        iFrameStreamWrite.write(reinterpret_cast<const char*>(iFrameWrite.second), iFrameWrite.first);
+
+         CineIA::iabError error = CineIA::kIABNoError;
+         if(!settings.forceDolbyConstraint)
+@@ -551,7 +655,7 @@ int main(int argc, const char* argv[]) {
+         outputFileSize += oFrameWriteLength;
+
+         oFrameBuffer.FrameNumber(frameNum);
+-        oFrameBuffer.SetData((byte_t*)oFrameWrite.data(), oFrameWriteLength);
++        oFrameBuffer.SetData(reinterpret_cast<byte_t*>(oFrameWrite.data()), oFrameWriteLength);
+         oFrameBuffer.Size(oFrameWriteLength);
+         writer.WriteFrame(oFrameBuffer);
+     }
+-d417531ed59434ecaee487adfdf54646408479bf external/asdcplib
+-1232c550aac4be4d4106605d30bd0eb798b3f4bf external/iab-renderer
+-222382c3a6abbce32503792c59826063660ddb56 external/indicators
