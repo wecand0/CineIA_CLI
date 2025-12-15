@@ -45,4 +45,10 @@ endif()
 
 # tests
 
-add_subdirectory(tests)
+# Allow parent project to disable building upstream tests (they fail on some toolchains
+# and are not needed when IABLib is used as a third-party library).
+option(IABLIB_BUILD_TESTS "Build iab-renderer unit and performance tests" OFF)
+
+if(IABLIB_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
